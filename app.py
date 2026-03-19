@@ -3,267 +3,242 @@ import pandas as pd
 from serpapi import GoogleSearch
 from openai import OpenAI
 import time
-import os
 
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="Artemis AI", page_icon="🚀", layout="wide")
 
-# -------- CONFIG --------
-st.set_page_config(page_title="Artemis AI - Lead Intelligence", layout="wide")
-
-# Use secrets (for deployment)
 SERP_API_KEY = st.secrets["SERP_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-# -------- STYLING --------
+# ---------------- HEADER ----------------
 st.markdown("""
-<style>
-h1 {
-    text-align: center;
-    font-size: 3rem;
-}
-.subtext {
-    text-align: center;
-    color: #9ca3af;
-    margin-bottom: 2rem;
-}
-</style>
+    <h1 style='text-align: center;'>🚀 Artemis AI</h1>
+    <p style='text-align: center; color: gray; font-size:16px;'>
+    AI-powered lead intelligence platform to discover, evaluate, and prioritise high-value prospects
+    </p>
 """, unsafe_allow_html=True)
 
+st.markdown("---")
 
-# -------- HEADER --------
-st.markdown("<h1>🚀 Artemis AI</h1>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='subtext'>AI-powered lead intelligence platform to discover, evaluate, and prioritise high-value prospects</div>",
-    unsafe_allow_html=True
-)
-
-
-# -------- SIDEBAR --------
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("⚙️ Controls")
 
-    num_companies = st.slider("Companies", 1, 15, 5)
-    num_people = st.slider("People per company", 1, 5, 3)
+    num_companies = st.slider("Companies", 1, 10, 5)
+    people_per_company = st.slider("People per company", 1, 5, 3)
 
     st.markdown("---")
-    st.markdown("### Filter")
-    filter_score = st.selectbox("Lead Score", ["All", "🔥 High", "⚡ Medium", "🟢 Low"])
 
-    st.markdown("---")
-    st.markdown("### About")
-    st.write("Artemis AI helps identify decision-makers and prioritise leads using AI insights.")
+    st.subheader("ℹ️ About Artemis AI")
+    st.markdown("""
+    Artemis AI is a lightweight lead intelligence engine that:
+    
+    - 🔍 Discovers startups via YC + Google
+    - 👤 Identifies decision-makers
+    - 🧠 Generates AI-powered insights
+    - 📊 Helps prioritise high-value leads
+    
+    Built for modern outbound & research workflows.
+    """)
 
+# ---------------- INPUT SECTION ----------------
+st.subheader("🔍 Target Configuration")
 
-# -------- FUNCTIONS --------
-@st.cache_data
-def get_companies(api_key, query):
+col1, col2 = st.columns(2)
+
+# Industry
+with col1:
+    industry_options = [
+        "AI", "Fintech", "SaaS", "Cybersecurity",
+        "DevTools", "Data Analytics", "Other"
+    ]
+
+    selected_industry = st.selectbox("Select Industry", industry_options)
+
+    if selected_industry == "Other":
+        industry = st.text_input("Custom Industry")
+    else:
+        industry = selected_industry
+
+# Region
+with col2:
+    region_options = [
+        "Global", "United States", "India",
+        "Europe", "United Kingdom", "Asia"
+    ]
+
+    region = st.selectbox("🌍 Target Region", region_options)
+
+st.markdown("")
+
+# ---------------- FUNCTIONS ----------------
+
+def get_companies(industry, region, limit):
+
+    if region == "Global":
+        query = f"site:ycombinator.com/companies {industry}"
+    else:
+        query = f"site:ycombinator.com/companies {industry} {region}"
+
     params = {
-        "q": f"site:ycombinator.com/companies {query}",
-        "api_key": api_key,
-        "num": 20
+        "q": query,
+        "api_key": SERP_API_KEY,
+        "num": limit * 4
     }
 
-    search = GoogleSearch(params)
-    results = search.get_dict()
+    results = GoogleSearch(params).get_dict()
 
     companies = []
     seen = set()
 
     for r in results.get("organic_results", []):
-        title = r.get("title", "")
         link = r.get("link", "")
+        title = r.get("title", "")
 
-        if link in seen:
-            continue
-        seen.add(link)
+        if (
+            "/companies/" in link
+            and "industry" not in link
+            and "location" not in link
+            and link.count("/") <= 5
+        ):
+            name = title.split(":")[0].strip()
 
-        if "industry" in link or "overview" in link:
-            continue
+            if name and name not in seen:
+                seen.add(name)
+                companies.append({
+                    "Company": name,
+                    "Website": link
+                })
 
-        name = title.split(":")[0].strip()
+        if len(companies) >= limit:
+            break
 
-        if name:
-            companies.append({
-                "Company Name": name,
-                "Website": link
-            })
-
-    return companies[:num_companies]
+    return companies
 
 
-@st.cache_data
-def get_people(company, api_key):
+def get_people(company):
+    query = f"{company} founder CTO CEO LinkedIn"
+
     params = {
-        "q": f"{company} founder CTO LinkedIn",
-        "api_key": api_key,
-        "num": 20
+        "q": query,
+        "api_key": SERP_API_KEY
     }
 
-    search = GoogleSearch(params)
-    results = search.get_dict()
+    results = GoogleSearch(params).get_dict()
 
     people = []
-    seen = set()
 
     for r in results.get("organic_results", []):
-        title = r.get("title", "")
         link = r.get("link", "")
+        title = r.get("title", "")
 
-        if "linkedin.com/in/" not in link:
-            continue
+        if "linkedin.com/in/" in link:
+            parts = title.split("-")
 
-        if link in seen:
-            continue
-        seen.add(link)
+            if len(parts) >= 2:
+                name = parts[0].strip()
+                role = parts[-1].strip()
 
-        parts = title.split(" - ")
-        name = parts[0].strip()
-        role = parts[1].strip() if len(parts) > 1 else ""
+                if len(role) < 60:
+                    people.append({
+                        "Person": name,
+                        "Role": role,
+                        "LinkedIn": link
+                    })
 
-        if not any(x in role.lower() for x in ["founder", "ceo", "cto"]):
-            continue
-
-        role = role.split("|")[0].split("@")[0].strip()
-
-        people.append({
-            "Person": name,
-            "Role": role,
-            "LinkedIn": link
-        })
-
-    return people[:num_people]
+    return people
 
 
-def analyze(company):
+def analyze_company(company):
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "user", "content": f"What does {company} do in one line?"}
+                {
+                    "role": "user",
+                    "content": f"Explain what {company} does in one short professional sentence."
+                }
             ]
         )
         return response.choices[0].message.content.strip()
     except:
-        return f"{company} is an AI-related company"
+        return f"{company} operates in {industry}"
 
 
-def score_lead(role, insight):
-    role = role.lower()
-    insight = insight.lower()
-
-    score = 0
-
-    if "ceo" in role or "founder" in role:
-        score += 3
-    elif "cto" in role:
-        score += 2
-    else:
-        score += 1
-
-    if "ai" in insight or "platform" in insight:
-        score += 2
-    elif "tool" in insight or "software" in insight:
-        score += 1
-
-    if score >= 4:
-        return "🔥 High"
-    elif score >= 3:
-        return "⚡ Medium"
-    else:
-        return "🟢 Low"
-
-
-# -------- INPUT --------
-query = st.text_input("🔍 Enter industry (e.g., AI, fintech, SaaS)")
-
-
-# -------- MAIN --------
+# ---------------- MAIN ----------------
 if st.button("✨ Generate Leads"):
-    if query:
 
-        data = []
+    if not industry:
+        st.warning("Please enter/select an industry")
+        st.stop()
 
-        with st.spinner("🔎 Finding leads..."):
-            companies = get_companies(SERP_API_KEY, query)
+    progress = st.progress(0)
+    status = st.empty()
 
-            for c in companies:
-                name = c["Company Name"]
-                website = c["Website"]
+    companies = get_companies(industry, region, num_companies)
 
-                st.write(f"Processing **{name}**...")
+    all_data = []
 
-                people = get_people(name, SERP_API_KEY)
-                insight = analyze(name)
+    for i, company in enumerate(companies):
 
-                time.sleep(1)
+        status.info(f"🔍 Analyzing {company['Company']}...")
 
-                for p in people:
-                    score = score_lead(p["Role"], insight)
+        people = get_people(company["Company"])
+        insight = analyze_company(company["Company"])
+        time.sleep(1)
 
-                    data.append({
-                        "Company": name,
-                        "Website": website,
-                        "Person": p["Person"],
-                        "Role": p["Role"],
-                        "LinkedIn": p["LinkedIn"],
-                        "Insight": insight,
-                        "Score": score
-                    })
+        for person in people[:people_per_company]:
+            all_data.append({
+                "Company": company["Company"],
+                "Website": company["Website"],
+                "Person": person["Person"],
+                "Role": person["Role"],
+                "LinkedIn": person["LinkedIn"],
+                "Insight": insight
+            })
 
-        df = pd.DataFrame(data).drop_duplicates()
+        progress.progress((i + 1) / len(companies))
 
-        # -------- CLEAN NAMES --------
-        df = df.rename(columns={
-            "Person": "Name",
-            "LinkedIn": "Profile",
-            "Insight": "Company Insight"
-        })
+    status.success("✅ Leads generated successfully!")
+    progress.empty()
 
-        # -------- SORTING --------
-        score_order = {"🔥 High": 3, "⚡ Medium": 2, "🟢 Low": 1}
-        df["ScoreValue"] = df["Score"].map(score_order)
-        df = df.sort_values(by="ScoreValue", ascending=False).drop(columns=["ScoreValue"])
+    df = pd.DataFrame(all_data)
 
-        # -------- FILTER --------
-        if filter_score != "All":
-            df = df[df["Score"] == filter_score]
+    if not df.empty:
 
-        # -------- METRICS --------
-        st.markdown("---")
+        df = df.drop_duplicates(subset=["Company", "Person"])
+        df.index = df.index + 1
+
+        # Metrics
         col1, col2, col3 = st.columns(3)
-
         col1.metric("Companies", df["Company"].nunique())
         col2.metric("Total Leads", len(df))
-        col3.metric("Avg/Company", round(len(df)/max(df["Company"].nunique(), 1), 1))
+        col3.metric("Avg/Company", round(len(df) / df["Company"].nunique(), 1))
 
-        st.markdown("---")
-
-        # -------- TOP LEADS --------
-        st.subheader("🔥 Top Leads")
-        st.dataframe(df[df["Score"] == "🔥 High"], use_container_width=True)
-
-        # -------- ALL RESULTS --------
-        st.subheader("📊 All Results")
-
-        df["Profile"] = df["Profile"].apply(lambda x: f"[Profile]({x})")
-
+        st.markdown("## 🔥 Top Leads")
         st.dataframe(df, use_container_width=True)
 
-        st.success("✅ Leads generated successfully!")
+        csv = df.to_csv(index=False)
 
         st.download_button(
-            "⬇ Download Leads",
-            df.to_csv(index=False),
+            "⬇️ Download Leads",
+            csv,
             "artemis_leads.csv",
-            mime="text/csv"
+            "text/csv"
         )
 
     else:
-        st.warning("Please enter an industry.")
+        st.error("No leads found. Try another query.")
 
 
-# -------- FOOTER --------
+# ---------------- FOOTER ----------------
 st.markdown("---")
-st.markdown("Built by Sanjay Sriram • Artemis AI")
+
+st.markdown("""
+<div style='text-align: center; color: gray; font-size: 13px;'>
+    Built with ❤️ by Sanjay • Artemis AI © 2026<br>
+    <span style='font-size:12px;'>Lead intelligence for the next generation of builders</span>
+</div>
+""", unsafe_allow_html=True)
